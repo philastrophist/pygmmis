@@ -181,6 +181,21 @@ def covar_callback_default(coords, default=None):
     # return np.tile(default, (N,1,1))
     return default
 
+class Transform(object):
+    def forward(self, x):
+        raise NotImplementedError()
+
+    def backward(self, x):
+        raise NotImplementedError()
+
+
+class IdentityTransform(Transform):
+    def forward(self, x):
+        return x
+
+    def backward(self, x):
+        return x
+
 
 class GMM(object):
     """Gaussian mixture model with K components in D dimensions.
@@ -532,7 +547,9 @@ def initFromKMeans(gmm, data, covar=None, rng=np.random):
         gmm.covar[k,:,:] = (d_m[:, :, None] * d_m[:, None, :]).sum(axis=0) / len(data)
 
 
-def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, sel_callback=None, oversampling=10, covar_callback=None, background=None, tol=1e-3, maxiter=None, frozen=None, split_n_merge=False, rng=np.random):
+def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, sel_callback=None, oversampling=10,
+        covar_callback=None, transform=IdentityTransform(), background=None, tol=1e-3, maxiter=None, frozen=None,
+        split_n_merge=False, rng=np.random):
     """Fit GMM to data.
 
     If given, init_callback is called to set up the GMM components. Then, the
@@ -540,7 +557,7 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
 
     Args:
         gmm: an instance if GMM
-        data: numpy array (N,D)
+        observed_data: numpy array (N,D)
         covar: sample noise covariance; numpy array (N,D,D) or (D,D) if i.i.d.
         R: sample projection matrix (full rank); numpy array (N,D,D)
         init_method (string): one of ['random', 'minmax', 'kmeans', 'none']
@@ -553,6 +570,8 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
             value of 1 is fine but results are noisy. Set as high as feasible.
         covar_callback: covariance callback for imputation samples.
             needs to be present if sel_callback and covar are set.
+        transform: A transform object which can transform data from the observed space to the fitting space and back
+                   If transform is given, data and covar are assumed to be in the observed space
         background: an instance of Background if simultaneous fitting is desired
         tol (float): tolerance for covergence of mean log-likelihood
         maxiter (int): maximum number of iterations of EM
@@ -573,7 +592,7 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
     Throws:
         RuntimeError for inconsistent argument combinations
     """
-
+    data = transform.forward(data)
     N = len(data)
     # if there are data (features) missing, i.e. masked as np.nan, set them to zeros
     # and create/set covariance elements to very large value to reduce its weight
@@ -664,7 +683,10 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
             raise NotImplementedError("frozen should be list of indices or dictionary with keys in ['amp','mean','covar']")
 
     try:
-        log_L, N, N2 = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R, sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, changeable=changeable, maxiter=maxiter, tol=tol, rng=rng)
+        log_L, N, N2 = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R, sel_callback=sel_callback,
+                           oversampling=oversampling, covar_callback=covar_callback, transform=transform, w=w, pool=pool,
+                           chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, changeable=changeable,
+                           maxiter=maxiter, tol=tol, rng=rng)
     except Exception:
         # cleanup
         pool.close()
@@ -708,10 +730,16 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
             # Effectively, partial runs are as expensive as full runs.
 
             changeable['amp'] = changeable['mean'] = changeable['covar'] = np.in1d(xrange(gmm.K), changing, assume_unique=True)
-            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_P", changeable=changeable, rng=rng)
+            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback,
+                                  oversampling=oversampling, covar_callback=covar_callback, transform=transform, w=w, pool=pool,
+                                  chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg,
+                                  maxiter=maxiter, tol=tol, prefix="SNM_P", changeable=changeable, rng=rng)
 
             changeable['amp'] = changeable['mean'] = changeable['covar'] = slice(None)
-            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_F", changeable=changeable, rng=rng)
+            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback,
+                                  oversampling=oversampling, covar_callback=covar_callback, transform=transform, w=w, pool=pool,
+                                  chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter,
+                                  tol=tol, prefix="SNM_F", changeable=changeable, rng=rng)
 
             if log_L >= log_L_:
                 # revert to backup
@@ -731,7 +759,9 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., cutoff=None, 
     return log_L, U
 
 # run EM sequence
-def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=None, oversampling=10, covar_callback=None, background=None, p_bg=None, w=0, pool=None, chunksize=1, cutoff=None, maxiter=None, tol=1e-3, prefix="", changeable=None, rng=np.random):
+def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=None, oversampling=10, covar_callback=None,
+        background=None, p_bg=None, w=0, transform=None, pool=None, chunksize=1, cutoff=None, maxiter=None, tol=1e-3, prefix="",
+        changeable=None, rng=np.random):
 
     # compute effective cutoff for chi2 in D dimensions
     if cutoff is not None:
@@ -767,7 +797,10 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
         bg_amp_ = background.amp
 
     while maxiter is None or it < maxiter: # limit loop in case of slow convergence
-        log_L_, N, N2, N0 = _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=covar, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, background=background, p_bg=p_bg , w=w, pool=pool, chunksize=chunksize, cutoff=cutoff_nd, tol=tol, changeable=changeable, it=it, rng=rng)
+        log_L_, N, N2, N0 = _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=covar, R=R, sel_callback=sel_callback,
+                                    oversampling=oversampling, covar_callback=covar_callback, transform=transform,
+                                    background=background, p_bg=p_bg , w=w, pool=pool, chunksize=chunksize, cutoff=cutoff_nd,
+                                    tol=tol, changeable=changeable, it=it, rng=rng)
 
         # check if component has moved by more than sigma/2
         shift2 = np.einsum('...i,...ij,...j', gmm.mean - gmm_.mean, np.linalg.inv(gmm_.covar), gmm.mean - gmm_.mean)
@@ -820,12 +853,15 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
     return log_L, N, N2
 
 # run one EM step
-def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, R=None, sel_callback=None, oversampling=10, covar_callback=None, background=None, p_bg=None, w=0, pool=None, chunksize=1, cutoff=None, tol=1e-3, changeable=None, it=0, rng=np.random):
+def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, R=None, sel_callback=None, oversampling=10,
+            covar_callback=None, background=None, p_bg=None, w=0, transform=IdentityTransform(), pool=None, chunksize=1,
+            cutoff=None, tol=1e-3, changeable=None, it=0, rng=np.random):
 
     # NOTE: T_inv (in fact (T_ik)^-1 for all samples i and components k)
     # is very large and is unfortunately duplicated in the parallelized _Mstep.
     # If memory is too limited, one can recompute T_inv in _Msums() instead.
-    log_L = _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=covar, R=R, background=background, p_bg=p_bg, pool=pool, chunksize=chunksize, cutoff=cutoff, it=it)
+    log_L = _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=covar, R=R, background=background, p_bg=p_bg, pool=pool,
+                   chunksize=chunksize, cutoff=cutoff, it=it)
     A,M,C,N,B = _Mstep(gmm, U, log_p, T_inv, log_S, H, data, covar=covar, R=R, p_bg=p_bg, pool=pool, chunksize=chunksize)
 
     A2 = M2 = C2 = B2 = H2 = N2 = 0
@@ -843,7 +879,8 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, R=None, sel_ca
 
         # create fake data with same mechanism as the original data,
         # but invert selection to get the missing part
-        data2, covar2, N0 = draw(gmm, len(data)*oversampling, sel_callback=sel_callback, orig_size=N0*oversampling, invert_sel=True, covar_callback=covar_callback, background=background, rng=rng)
+        data2, covar2, N0 = draw(gmm, len(data)*oversampling, sel_callback=sel_callback, orig_size=N0*oversampling,
+                                 invert_sel=True, covar_callback=covar_callback, transform=transform, background=background, rng=rng)
         U2 = [None for k in xrange(gmm.K)]
         N0 = int(N0/oversampling)
 
@@ -887,8 +924,8 @@ def _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, background=
     log_S[:] = 0
     H[:] = 0
     k = 0
-    for log_p[k], U[k], T_inv[k] in \
-    parmap.starmap(_Esum, zip(xrange(gmm.K), U), gmm, data, covar, R, cutoff, pool=pool, chunksize=chunksize):
+    for log_p[k], U[k], T_inv[k] in parmap.starmap(_Esum, zip(xrange(gmm.K), U), gmm, data, covar, R, cutoff, pool=pool,
+                                                   chunksize=chunksize):
         log_S[U[k]] += np.exp(log_p[k]) # actually S, not logS
         H[U[k]] = 1
         k += 1
@@ -921,7 +958,7 @@ def _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, background=
     return log_L
 
 # compute chi^2, and apply selections on component neighborhood based in chi^2
-def _Esum(k, U_k, gmm, data, covar=None, R=None, cutoff=None):
+def _Esum(k, U_k, gmm, data, covar=None, transform=IdentityTransform(), R=None, cutoff=None):
     # since U_k could be None, need explicit reshape
     d_ = data[U_k].reshape(-1, gmm.D)
     if covar is not None:
@@ -1095,7 +1132,7 @@ def _update(gmm, A, M, C, N, B, H, A2, M2, C2, N2, B2, H2, w, changeable=None, b
         gmm.covar[changeable['covar'],:,:] = (C + C2)[changeable['covar'],:,:] / (A + A2)[changeable['covar'],None,None]
 
 # draw from the model (+ background) and apply appropriate covariances
-def _drawGMM_BG(gmm, size, covar_callback=None, background=None, rng=np.random):
+def _drawGMM_BG(gmm, size, covar_callback=None, transform=IdentityTransform(), background=None, rng=np.random):
     # draw sample from model, or from background+model
     if background is None:
         data2 = gmm.draw(size, rng=rng)
@@ -1110,25 +1147,27 @@ def _drawGMM_BG(gmm, size, covar_callback=None, background=None, rng=np.random):
     # This can be avoided when the background footprint is large compared to
     # selection region
     if covar_callback is not None:
-        covar2 = covar_callback(data2)
-        if covar2.shape == (gmm.D, gmm.D): # one-for-all
-            noise = rng.multivariate_normal(np.zeros(gmm.D), covar2, size=len(data2))
+        observed_data2 = transform.backward(data2)
+        observed_covar2 = covar_callback(observed_data2)
+        if observed_covar2.shape == (gmm.D, gmm.D): # one-for-all
+            noise = rng.multivariate_normal(np.zeros(gmm.D), observed_covar2, size=len(data2))
         else:
             # create noise from unit covariance and then dot with eigenvalue
             # decomposition of covar2 to get a the right noise distribution:
             # n' = R V^1/2 n, where covar = R V R^-1
             # faster than drawing one sample per each covariance
             noise = rng.multivariate_normal(np.zeros(gmm.D), np.eye(gmm.D), size=len(data2))
-            val, rot = np.linalg.eigh(covar2)
-            val = np.maximum(val,0) # to prevent univariate errors to underflow
+            val, rot = np.linalg.eigh(observed_covar2)
+            val = np.maximum(val, 0) # to prevent univariate errors to underflow
             noise = np.einsum('...ij,...j', rot, np.sqrt(val)*noise)
-        data2 += noise
+        observed_data2 += noise
     else:
-        covar2 = None
-    return data2, covar2
+        observed_covar2 = None
+    return transform.forward(observed_data2), observed_covar2  # Transform noisy data back to fitting plane
 
 
-def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, covar_callback=None, background=None, rng=np.random):
+def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, covar_callback=None, transform=None,
+         background=None, rng=np.random):
     """Draw from the GMM (and the Background) with noise and selection.
 
     Draws orig_size samples from the GMM and the Background, if set; calls
@@ -1169,7 +1208,8 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
     # draw from model (with background) and add noise.
     # TODO: may want to decide whether to add noise before selection or after
     # Here we do noise, then selection, but this is not fundamental
-    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, background=background, rng=rng)
+    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform,
+                                background=background, rng=rng)
 
     # apply selection
     if sel_callback is not None:
@@ -1184,7 +1224,8 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         obs_size_ = sel2.sum()
         while obs_size_ > upper or obs_size_ < lower:
             orig_size = int(orig_size / obs_size_ * obs_size)
-            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, background=background, rng=rng)
+            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform,
+                                        background=background, rng=rng)
             sel2 = sel_callback(data2)
             obs_size_ = sel2.sum()
 
