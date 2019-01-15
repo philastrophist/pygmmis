@@ -532,7 +532,7 @@ def initFromKMeans(gmm, data, covar=None, rng=np.random):
         gmm.covar[k,:,:] = (d_m[:, :, None] * d_m[:, None, :]).sum(axis=0) / len(data)
 
 
-def fit(gmm, data, covar=None, transform=None, resampler=None, R=None, init_method='random', w=0., cutoff=None,
+def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0., cutoff=None,
         sel_callback=None, oversampling=10, covar_callback=None, background=None, tol=1e-3, maxiter=None, frozen=None,
         split_n_merge=False, rng=np.random):
     """Fit GMM to data.
@@ -545,7 +545,6 @@ def fit(gmm, data, covar=None, transform=None, resampler=None, R=None, init_meth
         data: data in the observed space; numpy array (N,D)
         covar: sample noise covariance in the observed space; numpy array (N,D,D) or (D,D) if i.i.d.
         transform: The transform object that converts between observed and fitting spaces
-        resampler: A resampler object that samples from each data point's uncertainty distribution
         R: sample projection matrix (full rank); numpy array (N,D,D)
         init_method (string): one of ['random', 'minmax', 'kmeans', 'none']
             defines the method to initialize the GMM components
@@ -578,9 +577,7 @@ def fit(gmm, data, covar=None, transform=None, resampler=None, R=None, init_meth
         RuntimeError for inconsistent argument combinations
     """
     if transform is not None:
-        resamples =  resampler.resample(data)
         data = transform.forward(data)
-        resamples = transform.forward(resamples)
     N = len(data)
     # if there are data (features) missing, i.e. masked as np.nan, set them to zeros
     # and create/set covariance elements to very large value to reduce its weight
@@ -830,6 +827,22 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
 
     return log_L, N, N2
 
+
+def _drawGaussian(ndim, covar, size, rng):
+    if covar.shape == (ndim, ndim):  # one-for-all
+        samples = rng.multivariate_normal(np.zeros(ndim), covar, size=size)
+    else:
+        # create samples from unit covariance and then dot with eigenvalue
+        # decomposition of `covar` to get a the right samples distribution:
+        # n' = R V^1/2 n, where covar = R V R^-1
+        # faster than drawing one sample per each covariance
+        samples = rng.multivariate_normal(np.zeros(ndim), np.eye(ndim), size=size)
+        val, rot = np.linalg.eigh(covar)
+        val = np.maximum(val, 0)  # to prevent univariate errors to underflow
+        samples = np.einsum('...ij,...j', rot, np.sqrt(val) * samples)
+    return samples
+
+
 # run one EM step
 def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None, n_resamples=None, R=None, sel_callback=None, oversampling=10, covar_callback=None, background=None, p_bg=None, w=0, pool=None, chunksize=1, cutoff=None, tol=1e-3, changeable=None, it=0, rng=np.random):
 
@@ -838,8 +851,8 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
     # If memory is too limited, one can recompute T_inv in _Msums() instead.
 
     if transform is not None:
-        assert covar is None, "covar need not be specified if we are estimating log_p from resampled data"
-        _data = resample_data(data, covar, transform)  # _data.shape == (N*R,D)
+        _data = _drawGaussian(gmm.D, covar, n_resamples*len(data), rng=rng)  # _data.shape == (N*R,D)
+        covar = None  # don't use covar from now on, only the resampled data
         resamples = True
     else:
         _data = data
@@ -1180,17 +1193,7 @@ def _drawGMM_BG(gmm, size, covar_callback=None, transform=None, resamples=None, 
             covar2 = covar_callback(transform.backward(data2))
         else:
             covar2 = covar_callback(data2)
-        if covar2.shape == (gmm.D, gmm.D): # one-for-all
-            noise = rng.multivariate_normal(np.zeros(gmm.D), covar2, size=noise_size)
-        else:
-            # create noise from unit covariance and then dot with eigenvalue
-            # decomposition of covar2 to get a the right noise distribution:
-            # n' = R V^1/2 n, where covar = R V R^-1
-            # faster than drawing one sample per each covariance
-            noise = rng.multivariate_normal(np.zeros(gmm.D), np.eye(gmm.D), size=noise_size)
-            val, rot = np.linalg.eigh(covar2)
-            val = np.maximum(val,0) # to prevent univariate errors to underflow
-            noise = np.einsum('...ij,...j', rot, np.sqrt(val)*noise)
+        noise = _drawGaussian(gmm.D, covar2, noise_size, rng)
         if transform is not None:
             noise = transform.forward(noise)
         if resamples is None:
@@ -1203,7 +1206,7 @@ def _drawGMM_BG(gmm, size, covar_callback=None, transform=None, resamples=None, 
 
 
 def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, covar_callback=None, transform=None,
-         resamples=None, background=None, rng=np.random):
+         n_resamples=None, background=None, rng=np.random):
     """Draw from the GMM (and the Background) with noise and selection.
 
     Draws orig_size samples from the GMM and the Background, if set; calls
@@ -1229,7 +1232,7 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         covar_callback: covariance callback for imputation samples.
         transform: transformation to convert imputation samples to the fitting space from the observed space.
                    if transform is not None, draw will return covar=None, since covar has no useful meaning in the fitting space
-        resamples: the number of resamples to draw for each data point's uncertainty covariance.
+        n_resamples: the number of resamples to draw for each data point's uncertainty covariance.
                    draw will return data as an array of (N_orig*resamples, D)
         rng: numpy.random.RandomState for deterministic behavior
 
@@ -1242,20 +1245,20 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         RuntimeError for inconsistent argument combinations
     """
     if transform is not None:
-        assert resamples is not None, "If transform is specified (non-gaussian errors in fitting space), you need to to ask for resamples as well"
+        assert n_resamples is not None, "If transform is specified (non-gaussian errors in fitting space), you need to to ask for resamples as well"
     if orig_size is None:
         orig_size = int(obs_size)
 
     # draw from model (with background) and add noise.
     # TODO: may want to decide whether to add noise before selection or after
     # Here we do noise, then selection, but this is not fundamental
-    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=resamples,
+    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=n_resamples,
                                 background=background, rng=rng)
     # data2 is 3D shape == (N, R, D), if resamples is not None
 
     # apply selection
     if sel_callback is not None:
-        if resamples:
+        if n_resamples:
             sel2 = sel_callback(data2.mean(axis=1))
         else:
             sel2 = sel_callback(data2)
@@ -1269,9 +1272,9 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         obs_size_ = sel2.sum()
         while obs_size_ > upper or obs_size_ < lower:
             orig_size = int(orig_size / obs_size_ * obs_size)
-            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=resamples,
+            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=n_resamples,
                                         background=background, rng=rng)
-            if resamples:
+            if n_resamples is not None:
                 sel2 = sel_callback(data2.mean(axis=1))
             else:
                 sel2 = sel_callback(data2)
