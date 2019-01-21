@@ -246,7 +246,7 @@ if __name__ == '__main__':
     rng = RandomState(seed)
     analytical_gmm = deepcopy(start_gmm)
     pygmmis.fit(analytical_gmm, data, covar=covar, maxiter=100,
-                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10)
+                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10, split_n_merge=3)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
     plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
 
@@ -257,17 +257,15 @@ if __name__ == '__main__':
 
     class MyTransform(pygmmis.Transform):
         def forward(self, x):
-            return x #- 100
+            return x - 100
 
         def backward(self, x):
-            return x# + 100
+            return x + 100
 
     transform = MyTransform()
     observed_data = transform.backward(data)
 
-
-
-    pygmmis.fit(resampled_gmm, observed_data, covar=covar, maxiter=100, n_resamples=50, transform=pygmmis.Transform(),
-                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10)
+    pygmmis.fit(resampled_gmm, observed_data, covar=covar, maxiter=100, n_resamples=50, transform=transform,
+                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10, split_n_merge=3)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
     plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")

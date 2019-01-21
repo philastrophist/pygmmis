@@ -701,7 +701,7 @@ def fit(gmm, data, covar=None, transform=None, n_resamples=None, R=None, init_me
             gmm_.covar[:,:,:] = gmm.covar[:,:,:]
             U_ = [U[k].copy() for k in xrange(gmm.K)]
 
-            changing, cleanup = _findSNMComponents(gmm, U, log_p, log_S, N+N2, pool=pool, chunksize=chunksize)
+            changing, cleanup = _findSNMComponents(gmm, U, log_p, log_S, N+N2, n_resamples, pool=pool, chunksize=chunksize)
             logger.info("merging %d and %d, splitting %d" % tuple(changing))
 
             # modify components
@@ -1313,12 +1313,14 @@ def _JS(k, gmm, log_p, log_S, U, A):
     return np.dot(np.exp(log_q_k), log_q_k - np.log(A[k]) - log_p[k] + np.log(gmm.amp[k])) / A[k]
 
 
-def _findSNMComponents(gmm, U, log_p, log_S, N, pool=None, chunksize=1):
+def _findSNMComponents(gmm, U, log_p, log_S, N, resamples, pool=None, chunksize=1):
     # find those components that are most similar
     JM = np.zeros((gmm.K, gmm.K))
     # compute log_q (posterior for k given i), but use normalized probabilities
     # to allow for merging of empty components
     log_q = [log_p[k] - log_S[U[k]] - np.log(gmm.amp[k]) for k in xrange(gmm.K)]
+    if resamples:
+        log_q = [logsum(lq, axis=1) - np.log(resamples) for lq in log_q]
     for k in xrange(gmm.K):
         # don't need diagonal (can merge), and JM is symmetric
         for j in xrange(k+1, gmm.K):
