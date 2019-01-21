@@ -862,7 +862,7 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
     # If memory is too limited, one can recompute T_inv in _Msums() instead.
 
     if n_resamples is not None:
-        _data = _drawGaussian(gmm.D, covar, (len(data), n_resamples), rng=rng) + data[:, None, :]  # _data.shape == (N*R,D)
+        _data = _drawGaussian(gmm.D, covar, (len(data), n_resamples), rng=rng) + transform.backward(data)[:, None, :] # _data.shape == (N*R,D)
         if transform is not None:
             _data = transform.forward(_data)
         _covar = None  # don't use covar from now on, only the resampled data
@@ -1198,19 +1198,24 @@ def _drawGMM_BG(gmm, size, covar_callback=None, transform=None, resamples=None, 
     # scattering them out is more likely than in.
     # This can be avoided when the background footprint is large compared to
     # selection region
-    noise_size = len(data2) + resamples if resamples is not None else len(data2)
+    noise_size = (size, resamples) if resamples is not None else size
     if covar_callback is not None:
-        if transform is not None:
-            covar2 = covar_callback(transform.backward(data2))
+        if resamples is not None:
+            if transform is not None:
+                observed_data2 = transform.backward(data2)
+            else:
+                observed_data2 = data2
+            covar2 = covar_callback(observed_data2)
         else:
             covar2 = covar_callback(data2)
         noise = _drawGaussian(gmm.D, covar2, noise_size, rng)
-        if transform is not None:
-            noise = transform.forward(noise)
-        if resamples is None:
-            data2 += noise
+        if resamples is not None:
+            if transform is not None:
+                data2 = transform.forward(observed_data2[:, None] + noise)
+            else:
+                data2 = observed_data2[:, None] + noise
         else:
-            data2 = data2.reshape(size, resamples)
+            data2 += noise
     else:
         covar2 = None
     return data2, covar2
@@ -1265,7 +1270,9 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
     # Here we do noise, then selection, but this is not fundamental
     data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=n_resamples,
                                 background=background, rng=rng)
-    # data2 is 3D shape == (N, R, D), if resamples is not None
+    if n_resamples is not None:
+        assert data2.shape == (obs_size, n_resamples, gmm.D)
+        # data2 is 3D shape == (N, R, D), if resamples is not None
 
     # apply selection
     if sel_callback is not None:
