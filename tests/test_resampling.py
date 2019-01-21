@@ -239,16 +239,17 @@ if __name__ == '__main__':
                                [[ 6.87497209,  9.23363409],
                                 [ 9.23363409, 17.46852466]]])
     start_gmm.amp = np.array([0.19484221, 0.57429356, 0.23086422])
-    plotResults(orig, data, start_gmm, patch=ps, description="starting point")
-
+    # plotResults(orig, data, gmm, patch=ps, description="Truth")
+    # plotResults(orig, data, start_gmm, patch=ps, description="starting point")
+    #
     covar_cb = partial(pygmmis.covar_callback_default, default=np.eye(D)*disp**2)
     start = datetime.datetime.now()
     rng = RandomState(seed)
     analytical_gmm = deepcopy(start_gmm)
-    pygmmis.fit(analytical_gmm, data, covar=covar, maxiter=100,
+    pygmmis.fit(analytical_gmm, data, covar=covar, maxiter=100, sel_callback=cb, covar_callback=covar_cb,
                 w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10, split_n_merge=3)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
-    plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
+    # plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
 
 
     start = datetime.datetime.now()
@@ -265,7 +266,12 @@ if __name__ == '__main__':
     transform = MyTransform()
     observed_data = transform.backward(data)
 
-    pygmmis.fit(resampled_gmm, observed_data, covar=covar, maxiter=100, n_resamples=50, transform=transform,
+    pygmmis.fit(resampled_gmm, observed_data, covar=covar, maxiter=100, sel_callback=cb, covar_callback=covar_cb,
+                n_resamples=5000, transform=transform,
                 w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10, split_n_merge=3)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
-    plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")
+    # plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")
+
+    # TODO: resampled estimate diverges, compare outputs of _ESTEP and _MSTEP
+    # TODO: _ESTEP seems reasonable, perhaps _MSTEP is not normalising correctly for resampled data?
+    # TODO: A and A2 normalise in _update, maybe they're wrong, need to take the mean in _update not earlier?

@@ -899,7 +899,7 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
         N0 = int(N0/oversampling)
 
         if len(data2) > 0:
-            log_S2 = np.zeros(len(data2))
+            log_S2 = np.zeros(len(data2)) if n_resamples is None else np.zeros((len(data2), n_resamples))
             H2 = np.zeros(len(data2), dtype='bool')
             log_p2 = [[] for k in xrange(gmm.K)]
             T2_inv = [None for k in xrange(gmm.K)]
@@ -909,10 +909,21 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
             else:
                 p_bg2 = None
 
-            log_L2 = _Estep(gmm, log_p2, U2, T2_inv, log_S2, H2, data2, covar=covar2, R=R2,  background=background,
-                            p_bg=p_bg2, pool=pool, chunksize=chunksize, cutoff=cutoff, resamples=resamples, it=it)
-            A2,M2,C2,N2,B2 = _Mstep(gmm, U2, log_p2, T2_inv, log_S2, H2, data2, covar=covar2, R=R2, p_bg=p_bg2,
-                                    pool=pool, chunksize=chunksize, resamples=resamples)
+            if n_resamples is not None:
+                _data2 = _drawGaussian(gmm.D, covar, (len(data2), n_resamples), rng=rng) + transform.backward(data2)[:,None,:]  # _data.shape == (N*R,D)
+                if transform is not None:
+                    _data2 = transform.forward(_data2)
+                _covar2 = None  # don't use covar from now on, only the resampled data
+                _resamples2 = True
+            else:
+                _covar2 = covar2
+                _data2 = data2
+                _resamples2 = False
+
+            log_L2 = _Estep(gmm, log_p2, U2, T2_inv, log_S2, H2, _data2, covar=_covar2, R=R2,  background=background,
+                            p_bg=p_bg2, pool=pool, chunksize=chunksize, cutoff=cutoff, resamples=_resamples2, it=it)
+            A2,M2,C2,N2,B2 = _Mstep(gmm, U2, log_p2, T2_inv, log_S2, H2, _data2, covar=_covar2, R=R2, p_bg=p_bg2,
+                                    pool=pool, chunksize=chunksize, resamples=_resamples2)
 
             # normalize foer oversampling
             A2 /= oversampling
@@ -938,7 +949,8 @@ def _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, background=
     # need S = sum_k p(i | k) for further calculation
     # also N = {i | i in neighborhood[k]} for any k
     if resamples:
-        assert covar is None, "covar need not be specified if we are estimating log_p from resampled data"
+        # assert covar is None, "covar need not be specified if we are estimating log_p from resampled data"
+        covar = None
         n_points, n_resamples, _ = data.shape
     import parmap
     log_S[:] = 0
@@ -1198,31 +1210,24 @@ def _drawGMM_BG(gmm, size, covar_callback=None, transform=None, resamples=None, 
     # scattering them out is more likely than in.
     # This can be avoided when the background footprint is large compared to
     # selection region
-    noise_size = (size, resamples) if resamples is not None else size
     if covar_callback is not None:
-        if resamples is not None:
-            if transform is not None:
-                observed_data2 = transform.backward(data2)
-            else:
-                observed_data2 = data2
-            covar2 = covar_callback(observed_data2)
+        if transform is not None:
+            observed_data2 = transform.backward(data2)
         else:
-            covar2 = covar_callback(data2)
-        noise = _drawGaussian(gmm.D, covar2, noise_size, rng)
-        if resamples is not None:
-            if transform is not None:
-                data2 = transform.forward(observed_data2[:, None] + noise)
-            else:
-                data2 = observed_data2[:, None] + noise
+            observed_data2 = data2
+        covar2 = covar_callback(observed_data2)
+        noise = _drawGaussian(gmm.D, covar2, len(data2), rng)
+        if transform is not None:
+            data2 = transform.forward(observed_data2 + noise)
         else:
-            data2 += noise
+            data2 = observed_data2 + noise
     else:
         covar2 = None
     return data2, covar2
 
 
 def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, covar_callback=None, transform=None,
-         n_resamples=None, background=None, rng=np.random):
+         background=None, rng=np.random):
     """Draw from the GMM (and the Background) with noise and selection.
 
     Draws orig_size samples from the GMM and the Background, if set; calls
@@ -1248,8 +1253,6 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         covar_callback: covariance callback for imputation samples.
         transform: transformation to convert imputation samples to the fitting space from the observed space.
                    if transform is not None, draw will return covar=None, since covar has no useful meaning in the fitting space
-        n_resamples: the number of resamples to draw for each data point's uncertainty covariance.
-                   draw will return data as an array of (N_orig*resamples, D)
         rng: numpy.random.RandomState for deterministic behavior
 
     Returns:
@@ -1260,26 +1263,18 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
     Throws:
         RuntimeError for inconsistent argument combinations
     """
-    if transform is not None:
-        assert n_resamples is not None, "If transform is specified (non-gaussian errors in fitting space), you need to to ask for resamples as well"
     if orig_size is None:
         orig_size = int(obs_size)
 
     # draw from model (with background) and add noise.
     # TODO: may want to decide whether to add noise before selection or after
     # Here we do noise, then selection, but this is not fundamental
-    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=n_resamples,
+    data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform,
                                 background=background, rng=rng)
-    if n_resamples is not None:
-        assert data2.shape == (obs_size, n_resamples, gmm.D)
-        # data2 is 3D shape == (N, R, D), if resamples is not None
 
     # apply selection
     if sel_callback is not None:
-        if n_resamples:
-            sel2 = sel_callback(data2.mean(axis=1))
-        else:
-            sel2 = sel_callback(data2)
+        sel2 = sel_callback(data2)
 
         # check if predicted observed size is consistent with observed data
         # 68% confidence interval for Poisson variate: observed size
@@ -1290,12 +1285,9 @@ def draw(gmm, obs_size, sel_callback=None, invert_sel=False, orig_size=None, cov
         obs_size_ = sel2.sum()
         while obs_size_ > upper or obs_size_ < lower:
             orig_size = int(orig_size / obs_size_ * obs_size)
-            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform, resamples=n_resamples,
+            data2, covar2 = _drawGMM_BG(gmm, orig_size, covar_callback=covar_callback, transform=transform,
                                         background=background, rng=rng)
-            if n_resamples is not None:
-                sel2 = sel_callback(data2.mean(axis=1))
-            else:
-                sel2 = sel_callback(data2)
+            sel2 = sel_callback(data2)
             obs_size_ = sel2.sum()
 
         if invert_sel:
