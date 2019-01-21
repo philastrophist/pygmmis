@@ -231,23 +231,26 @@ if __name__ == '__main__':
     # plot data vs true model
     # plotResults(orig, data, gmm, patch=ps, description="Truth", disp=disp)
 
+    start_gmm = deepcopy(gmm)
+    pygmmis.fit(start_gmm, data, covar=covar, init_method='random', maxiter=1)
+    plotResults(orig, data, start_gmm, patch=ps, description="starting point")
 
     covar_cb = partial(pygmmis.covar_callback_default, default=np.eye(D)*disp**2)
     start = datetime.datetime.now()
     rng = RandomState(seed)
-    analytical_gmm = deepcopy(gmm)
-    pygmmis.fit(analytical_gmm, data, covar=covar, w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10, split_n_merge=3)
+    analytical_gmm = deepcopy(start_gmm)
+    pygmmis.fit(analytical_gmm, data, covar=covar, maxiter=100,
+                w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
-    # plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
+    plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
 
 
-    covar_cb = partial(pygmmis.covar_callback_default, default=np.eye(D)*disp**2)
     start = datetime.datetime.now()
     rng = RandomState(seed)
-    resampled_gmm = deepcopy(gmm)
+    resampled_gmm = deepcopy(start_gmm)
 
     transform = pygmmis.Transform()
-    pygmmis.fit(resampled_gmm, data, covar=covar, n_resamples=50, transform=transform,
-                w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10, split_n_merge=3)
+    pygmmis.fit(resampled_gmm, data, covar=covar, maxiter=100, n_resamples=50, transform=transform,
+                w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
-    # plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")
+    plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")

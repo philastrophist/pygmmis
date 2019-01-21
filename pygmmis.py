@@ -638,7 +638,7 @@ def fit(gmm, data, covar=None, transform=None, n_resamples=None, R=None, init_me
     # containers
     # precautions for cases when some points are treated as outliers
     # and not considered as belonging to any component
-    log_S = createShared(np.zeros(N))          # S = sum_k p(x|k)
+    log_S = createShared(np.zeros((N, n_resamples))) if n_resamples is not None else createShared(np.zeros(N)) # S = sum_k p(x|k)
     # FIXME: create sheared boolean array results in
     # AttributeError: 'c_bool' object has no attribute '__array_interface__'
     H = np.zeros(N, dtype='bool')              # H == 1 for points in the fit
@@ -800,21 +800,21 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, transform=None, n_resa
         logger.info(status_mess)
 
         # convergence tests:
-        if it > 0 and log_L_ < log_L + tol:
-            # with imputation or background fitting, observed logL can decrease
-            # allow some slack, but revert to previous model if it gets worse
-            if log_L_ < log_L - tol:
-                gmm.amp[:] = gmm_.amp[:]
-                gmm.mean[:,:] = gmm_.mean[:,:]
-                gmm.covar[:,:,:] = gmm_.covar[:,:,:]
-                if background is not None:
-                    background.amp = bg_amp_
-                logger.info("likelihood decreased: reverting to previous model")
-                break
-            elif moved.size == 0:
-                log_L = log_L_
-                logger.info("likelihood converged within tolerance %r: stopping here." % tol)
-                break
+        # if it > 0 and log_L_ < log_L + tol:
+        #     # with imputation or background fitting, observed logL can decrease
+        #     # allow some slack, but revert to previous model if it gets worse
+        #     if log_L_ < log_L - tol:
+        #         gmm.amp[:] = gmm_.amp[:]
+        #         gmm.mean[:,:] = gmm_.mean[:,:]
+        #         gmm.covar[:,:,:] = gmm_.covar[:,:,:]
+        #         if background is not None:
+        #             background.amp = bg_amp_
+        #         logger.info("likelihood decreased: reverting to previous model")
+        #         break
+        #     elif moved.size == 0:
+        #         log_L = log_L_
+        #         logger.info("likelihood converged within tolerance %r: stopping here." % tol)
+        #         break
 
         # force update to U for all moved components
         if cutoff is not None:
@@ -861,8 +861,10 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
     # is very large and is unfortunately duplicated in the parallelized _Mstep.
     # If memory is too limited, one can recompute T_inv in _Msums() instead.
 
-    if transform is not None:
+    if n_resamples is not None:
         _data = _drawGaussian(gmm.D, covar, (len(data), n_resamples), rng=rng) + data[:, None, :]  # _data.shape == (N*R,D)
+        if transform is not None:
+            _data = transform.forward(_data)
         _covar = None  # don't use covar from now on, only the resampled data
         resamples = True
     else:
@@ -944,12 +946,7 @@ def _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, background=
     k = 0
     for log_p[k], U[k], T_inv[k] in parmap.starmap(_Esum, zip(xrange(gmm.K), U), gmm, data, covar, R, cutoff, resamples,
                                                    pool=pool, chunksize=chunksize):
-        if resamples:
-            log_p_k = log_p[k].reshape(-1, n_resamples)
-            estimated_log_p = logsum(log_p_k, axis=1) - np.log(n_resamples)
-            log_S[U[k]] += np.exp(estimated_log_p)  # actually S, not logS
-        else:
-            log_S[U[k]] += np.exp(log_p[k])  # actually S, not logS
+        log_S[U[k]] += np.exp(log_p[k])  # actually S, not logS, U[k] = indices of points close to k
         H[U[k]] = 1
         k += 1
 
@@ -985,8 +982,7 @@ def _Esum(k, U_k, gmm, data, covar=None, R=None, cutoff=None, resamples=False):
     # resamples=True assumes data has shape (N,R,D)
     if resamples:
         assert covar is None, "covar need not be specified if we are estimating log_p from resampled data"
-        n_points, n_resamples, _ = data.shape
-
+        n_resamples = data.shape[1]
 
     # since U_k could be None, need explicit reshape
     d_ = data[U_k].reshape(-1, gmm.D)
@@ -1024,9 +1020,9 @@ def _Esum(k, U_k, gmm, data, covar=None, R=None, cutoff=None, resamples=False):
     # changes to U will be minimal
     if cutoff is not None:
         if resamples:
-            _chi2 = chi2.reshape(n_points, n_resamples)  # only cutoff using the mean estimate
+            _chi2 = chi2.reshape(-1, n_resamples)  # only cutoff using the mean estimate
             indices = _chi2.mean(axis=1) < cutoff
-            chi2 = _chi2[indices].reshape(-1)
+            chi2 = _chi2[indices]
         else:
             indices = chi2 < cutoff
             chi2 = chi2[indices]
@@ -1047,7 +1043,7 @@ def _Esum(k, U_k, gmm, data, covar=None, R=None, cutoff=None, resamples=False):
     log2piD2 = np.log(2*np.pi)*(0.5*gmm.D)
     log_p = np.log(gmm.amp[k]) - log2piD2 - sign*logdet/2 - chi2/2
     # if resamples:
-    #     log_p = log_p.reshape(-1, data.shape[1], gmm.D).mean(axis=1)  # take the mean of the log_p for monte-carlo estimation
+    #     log_p = logsum(log_p, axis=1) - np.log(n_resamples) # take the mean of the log_p for monte-carlo estimation
     return log_p, U_k, T_inv_k
 
 # get zeroth, first, second moments of the data weighted with p_k(x) avgd over x
@@ -1078,7 +1074,7 @@ def _Mstep(gmm, U, log_p, T_inv, log_S, H, data, covar=None, R=None, p_bg=None, 
 
 # compute moments for the Mstep
 def _Msums(k, U_k, log_p_k, T_inv_k, gmm, data, R, log_S, resamples):
-    # resamples=True assumes log_p_k and data have shapes of (N*R,) and (N,R,D) respectively
+    # resamples=True assumes log_p_k and data have shapes of (N,R) and (N,R,D) respectively
     if resamples:
         assert T_inv_k is None, "Don't need T_inv_k and resampled data at the same time"
         n_points, n_resamples, _ = data.shape
@@ -1094,10 +1090,10 @@ def _Msums(k, U_k, log_p_k, T_inv_k, gmm, data, R, log_S, resamples):
 
     # NOTE: reshape needed when U_k is None because of its
     # implicit meaning as np.newaxis
-    log_p_k -= log_S[U_k].reshape(log_p_k.size)
-    d = data[U_k].reshape((log_p_k.size, gmm.D))
+    log_p_k -= log_S[U_k].reshape(log_p_k.shape)
+    d = data[U_k].reshape(log_p_k.shape+(gmm.D,))
     if R is not None:
-        R_ = R[U_k].reshape((log_p_k.size, gmm.D, gmm.D))
+        R_ = R[U_k].reshape(log_p_k.shape + (gmm.D, gmm.D))
 
     # amplitude: A_k = sum_i q_ik
     if resamples:
@@ -1107,19 +1103,19 @@ def _Msums(k, U_k, log_p_k, T_inv_k, gmm, data, R, log_S, resamples):
     A_k = np.exp(logsum(estimated_log_p_k))
 
     # in fact: q_ik, but we treat sample index i silently everywhere
-    q_k = np.exp(log_p_k)
+    q_k = np.exp(log_p_k)  # (N,)
 
     if R is None:
         mean = gmm.mean[k]
     else:
         mean = np.dot(R_, gmm.mean[k])
-    d_m = d - mean
+    d_m = d - mean  # (N, D)
 
     # data with errors?
     if T_inv_k is None and R is None:
         # mean: M_k = sum_i x_i q_ik
         if resamples:
-            M_k = (d * q_k[:, None]).reshape(data.shape[0], data.shape[1], gmm.D).mean(axis=1).sum(axis=0)
+            M_k = (d * q_k[..., None]).mean(axis=1).sum(axis=0)
         else:
             M_k = (d * q_k[:,None]).sum(axis=0)
 
@@ -1127,8 +1123,9 @@ def _Msums(k, U_k, log_p_k, T_inv_k, gmm, data, R, log_S, resamples):
         # funny way of saying: for each point i, do the outer product
         # of d_m with its transpose, multiply with pi[i], and sum over i
         if resamples:
-            C_k = (q_k[:, None, None] * d_m[:, :, None] * d_m[:, None, :]).reshape(data.shape[0], data.shape[1], gmm.D, gmm.D).mean(axis=1).sum(axis=0)
+            C_k = (q_k[..., None, None] * d_m[:, :, :, None] *  d_m[:, :, None, :]).mean(axis=1).sum(axis=0)
         else:
+            #           (N, 1, 1)     *   (N, D, 1)     *    (N, 1, D)
             C_k = (q_k[:, None, None] * d_m[:, :, None] * d_m[:, None, :]).sum(axis=0)
     else:
         if R is None: # that means T_ik is not None
