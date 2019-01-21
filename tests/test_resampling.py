@@ -228,11 +228,17 @@ if __name__ == '__main__':
     # single covariance for all samples
     covar = disp**2 * np.eye(D)
 
-    # plot data vs true model
-    # plotResults(orig, data, gmm, patch=ps, description="Truth", disp=disp)
-
     start_gmm = deepcopy(gmm)
-    pygmmis.fit(start_gmm, data, covar=covar, init_method='random', maxiter=1)
+    start_gmm.mean = np.array([[2.61641184, 6.87213943],
+                               [3.37617126, 4.40660136],
+                               [7.99196769, 7.07302165]])
+    start_gmm.covar = np.array([[[11.55256116, -7.49213141],
+                                [-7.49213141, 14.33994686]],
+                               [[10.04469829, -2.12086539],
+                                [-2.12086539,  9.18871938]],
+                               [[ 6.87497209,  9.23363409],
+                                [ 9.23363409, 17.46852466]]])
+    start_gmm.amp = np.array([0.19484221, 0.57429356, 0.23086422])
     plotResults(orig, data, start_gmm, patch=ps, description="starting point")
 
     covar_cb = partial(pygmmis.covar_callback_default, default=np.eye(D)*disp**2)
@@ -240,7 +246,7 @@ if __name__ == '__main__':
     rng = RandomState(seed)
     analytical_gmm = deepcopy(start_gmm)
     pygmmis.fit(analytical_gmm, data, covar=covar, maxiter=100,
-                w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10)
+                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
     plotResults(orig, data, analytical_gmm, patch=ps, description="$\mathtt{GMMis}$ - no resampling")
 
@@ -249,8 +255,19 @@ if __name__ == '__main__':
     rng = RandomState(seed)
     resampled_gmm = deepcopy(start_gmm)
 
-    transform = pygmmis.Transform()
-    pygmmis.fit(resampled_gmm, data, covar=covar, maxiter=100, n_resamples=50, transform=transform,
-                w=w, cutoff=cutoff, init_method='kmeans', rng=rng, tol=1e-10)
+    class MyTransform(pygmmis.Transform):
+        def forward(self, x):
+            return x #- 100
+
+        def backward(self, x):
+            return x# + 100
+
+    transform = MyTransform()
+    observed_data = transform.backward(data)
+
+
+
+    pygmmis.fit(resampled_gmm, observed_data, covar=covar, maxiter=100, n_resamples=50, transform=pygmmis.Transform(),
+                w=w, cutoff=cutoff, init_method='none', rng=rng, tol=1e-10)
     print ("execution time %ds" % (datetime.datetime.now() - start).seconds)
     plotResults(orig, data, resampled_gmm, patch=ps, description="$\mathtt{GMMis}$ - resampled")
