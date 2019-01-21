@@ -6,6 +6,13 @@ import ctypes
 import logging
 logger = logging.getLogger("pygmmis")
 
+class Transform(object):
+    def forward(self, x):
+        return x
+
+    def backward(self, x):
+        return x
+
 def createShared(a, dtype=ctypes.c_double):
     """Create a shared array to be used for multiprocessing's processes.
 
@@ -532,7 +539,7 @@ def initFromKMeans(gmm, data, covar=None, rng=np.random):
         gmm.covar[k,:,:] = (d_m[:, :, None] * d_m[:, None, :]).sum(axis=0) / len(data)
 
 
-def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0., cutoff=None,
+def fit(gmm, data, covar=None, transform=None, n_resamples=None, R=None, init_method='random', w=0., cutoff=None,
         sel_callback=None, oversampling=10, covar_callback=None, background=None, tol=1e-3, maxiter=None, frozen=None,
         split_n_merge=False, rng=np.random):
     """Fit GMM to data.
@@ -545,6 +552,7 @@ def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0
         data: data in the observed space; numpy array (N,D)
         covar: sample noise covariance in the observed space; numpy array (N,D,D) or (D,D) if i.i.d.
         transform: The transform object that converts between observed and fitting spaces
+        n_resamples: int: The number of resamples to use for the measurement uncertainty estimation
         R: sample projection matrix (full rank); numpy array (N,D,D)
         init_method (string): one of ['random', 'minmax', 'kmeans', 'none']
             defines the method to initialize the GMM components
@@ -631,7 +639,8 @@ def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0
     # precautions for cases when some points are treated as outliers
     # and not considered as belonging to any component
     log_S = createShared(np.zeros(N))          # S = sum_k p(x|k)
-    # FIXME: create sheared boolean array results in AttributeError: 'c_bool' object has no attribute '__array_interface__'
+    # FIXME: create sheared boolean array results in
+    # AttributeError: 'c_bool' object has no attribute '__array_interface__'
     H = np.zeros(N, dtype='bool')              # H == 1 for points in the fit
     log_p = [[] for k in xrange(gmm.K)]        # P = p(x|k) for x in U[k]
     T_inv = [None for k in xrange(gmm.K)]      # T = covar(x) + gmm.covar[k]
@@ -667,7 +676,8 @@ def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0
             raise NotImplementedError("frozen should be list of indices or dictionary with keys in ['amp','mean','covar']")
 
     try:
-        log_L, N, N2 = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R, sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, changeable=changeable, maxiter=maxiter, tol=tol, rng=rng)
+        log_L, N, N2 = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, transform=transform, n_resamples=n_resamples,
+                           R=R, sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, changeable=changeable, maxiter=maxiter, tol=tol, rng=rng)
     except Exception:
         # cleanup
         pool.close()
@@ -711,10 +721,10 @@ def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0
             # Effectively, partial runs are as expensive as full runs.
 
             changeable['amp'] = changeable['mean'] = changeable['covar'] = np.in1d(xrange(gmm.K), changing, assume_unique=True)
-            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_P", changeable=changeable, rng=rng)
+            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, transform=transform, n_resamples=n_resamples, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_P", changeable=changeable, rng=rng)
 
             changeable['amp'] = changeable['mean'] = changeable['covar'] = slice(None)
-            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_F", changeable=changeable, rng=rng)
+            log_L_, N_, N2_ = _EM(gmm, log_p, U, T_inv, log_S, H, data_, covar=covar_, transform=transform, n_resamples=n_resamples, R=R,  sel_callback=sel_callback, oversampling=oversampling, covar_callback=covar_callback, w=w, pool=pool, chunksize=chunksize, cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, tol=tol, prefix="SNM_F", changeable=changeable, rng=rng)
 
             if log_L >= log_L_:
                 # revert to backup
@@ -734,7 +744,7 @@ def fit(gmm, data, covar=None, transform=None, R=None, init_method='random', w=0
     return log_L, U
 
 # run EM sequence
-def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=None, oversampling=10, covar_callback=None,
+def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, transform=None, n_resamples=None, R=None, sel_callback=None, oversampling=10, covar_callback=None,
         background=None, p_bg=None, w=0, pool=None, chunksize=1, cutoff=None, maxiter=None, tol=1e-3, prefix="",
         changeable=None, rng=np.random):
 
@@ -772,7 +782,8 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
         bg_amp_ = background.amp
 
     while maxiter is None or it < maxiter: # limit loop in case of slow convergence
-        log_L_, N, N2, N0 = _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=covar, R=R,  sel_callback=sel_callback,
+        log_L_, N, N2, N0 = _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=covar, transform=transform,
+                                    n_resamples=n_resamples, R=R,  sel_callback=sel_callback,
                                     oversampling=oversampling, covar_callback=covar_callback, background=background,
                                     p_bg=p_bg , w=w, pool=pool, chunksize=chunksize, cutoff=cutoff_nd, tol=tol,
                                     changeable=changeable, it=it, rng=rng)
@@ -851,16 +862,17 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, transform=None
     # If memory is too limited, one can recompute T_inv in _Msums() instead.
 
     if transform is not None:
-        _data = _drawGaussian(gmm.D, covar, n_resamples*len(data), rng=rng)  # _data.shape == (N*R,D)
-        covar = None  # don't use covar from now on, only the resampled data
+        _data = _drawGaussian(gmm.D, covar, (len(data), n_resamples), rng=rng) + data[:, None, :]  # _data.shape == (N*R,D)
+        _covar = None  # don't use covar from now on, only the resampled data
         resamples = True
     else:
+        _covar = covar
         _data = data
         resamples = False
 
-    log_L = _Estep(gmm, log_p, U, T_inv, log_S, H, _data, covar=covar, R=R, background=background, p_bg=p_bg, pool=pool,
+    log_L = _Estep(gmm, log_p, U, T_inv, log_S, H, _data, covar=_covar, R=R, background=background, p_bg=p_bg, pool=pool,
                    chunksize=chunksize, cutoff=cutoff, resamples=resamples, it=it)
-    A,M,C,N,B = _Mstep(gmm, U, log_p, T_inv, log_S, H, _data, covar=covar, R=R, p_bg=p_bg, pool=pool, chunksize=chunksize,
+    A,M,C,N,B = _Mstep(gmm, U, log_p, T_inv, log_S, H, _data, covar=_covar, R=R, p_bg=p_bg, pool=pool, chunksize=chunksize,
                        resamples=resamples)
 
     A2 = M2 = C2 = B2 = H2 = N2 = 0
@@ -933,7 +945,8 @@ def _Estep(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, background=
     for log_p[k], U[k], T_inv[k] in parmap.starmap(_Esum, zip(xrange(gmm.K), U), gmm, data, covar, R, cutoff, resamples,
                                                    pool=pool, chunksize=chunksize):
         if resamples:
-            estimated_log_p = logsum(log_p[k].reshape(n_points, n_resamples), axis=1) - np.log(n_resamples)
+            log_p_k = log_p[k].reshape(-1, n_resamples)
+            estimated_log_p = logsum(log_p_k, axis=1) - np.log(n_resamples)
             log_S[U[k]] += np.exp(estimated_log_p)  # actually S, not logS
         else:
             log_S[U[k]] += np.exp(log_p[k])  # actually S, not logS
@@ -1013,9 +1026,10 @@ def _Esum(k, U_k, gmm, data, covar=None, R=None, cutoff=None, resamples=False):
         if resamples:
             _chi2 = chi2.reshape(n_points, n_resamples)  # only cutoff using the mean estimate
             indices = _chi2.mean(axis=1) < cutoff
+            chi2 = _chi2[indices].reshape(-1)
         else:
             indices = chi2 < cutoff
-        chi2 = chi2[indices]
+            chi2 = chi2[indices]
         if (covar is not None and covar.shape != (gmm.D, gmm.D)) or R is not None:
             T_inv_k = T_inv_k[indices]
         if U_k is None:
