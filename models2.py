@@ -58,7 +58,7 @@ if __name__ == '__main__':
     rng = RandomState(seed)
     np.random.seed(seed)
 
-    ndim, ncomp = 2, 4
+    ndim, ncomp = 2, 3
     model, _ = gaussians_in_a_box(ndim, ncomp, 0.75, 5)
 
     def selection(x):
