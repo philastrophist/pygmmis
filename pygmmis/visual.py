@@ -3,13 +3,20 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.patches import Ellipse
 
+def eigsorted(cov):
+    vals, vecs = np.linalg.eigh(cov)
+    order = vals.argsort()[::-1]
+    return vals[order], vecs[:,order]
+
+def orientation_from_covariance(cov, sigma):
+    vals, vecs = eigsorted(cov)
+    theta = np.degrees(np.arctan2(*vecs[:,0][::-1]))
+    w, h = 2 * sigma * np.sqrt(vals)
+    return w, h, theta
 
 def plot_ellipse(ax, mu, covariance, color, linewidth=2, alpha=0.5):
-    var, U = np.linalg.eig(covariance)
-    angle = 180. / np.pi * np.arccos(np.abs(U[0, 0]))
-    e = Ellipse(mu, 2 * np.sqrt(5.991 * var[0]),
-                2 * np.sqrt(5.991 * var[1]),
-                angle=angle)
+    x, y, angle = orientation_from_covariance(covariance, 2)
+    e = Ellipse(mu, x, y, angle=angle)
     e.set_alpha(alpha)
     e.set_linewidth(linewidth)
     e.set_edgecolor(color)
@@ -27,34 +34,46 @@ def plot_direction(ax, old, new, **kwargs):
 
 
 class GMMTracker(object):
-    def __init__(self, backend, data, dim_view=None, ax_labels=(None, None)):
+    def __init__(self, backend, data, ax_labels=None):
         self.backend = backend
         self.data = data
         self.artists = []
         self.n = None
-        self.fig, self.axes = None, None
+        self.figs, self.axes = [], []
         self.n_components = self.backend.mu.shape[1]
         self.ndim = self.backend.mu.shape[2]
-        self.dim_view = dim_view or [0, 1]
-        assert len(self.dim_view) == 2, "Can only visualise a 2d slice"
         self.ax_labels = ax_labels
 
-    def figure(self):
-        a = np.sqrt(self.n_components)
-        shape = [int(np.floor(a)), int(np.ceil(a))]
-        if np.prod(shape) < self.n_components:
-            shape[0] += 1
-        self.fig = plt.figure()
-        self.axes = []
-        ax = None
-        for i in range(self.n_components):
-            ax = self.fig.add_subplot(shape[0], shape[1], i+1, sharex=ax, sharey=ax)
-            ax.scatter(*self.data[:, self.dim_view].T, s=1, alpha=0.4)
-            ax.set_title(i)
-            ax.set_xlabel(self.ax_labels[0])
-            ax.set_ylabel(self.ax_labels[1])
-            self.axes.append(ax)
+    def figure(self, k):
+        fig = plt.figure()
+        import matplotlib.gridspec as gridspec
+        gs = gridspec.GridSpec(self.ndim, self.ndim)
+        subplots = np.empty((self.ndim, self.ndim), dtype=object)
+        for i in range(self.ndim):
+            for j in range(i+1, self.ndim):
+                sharex = subplots[i, j-1] if i > 0 else None
+                sharey = subplots[i-1, j] if j > 0 else None
+                subplots[i, j] = subplots[j, i] = ax = fig.add_subplot(gs[j, i], sharex=sharex, sharey=sharey)
+                ax.scatter(*self.data[:, [i, j]].T, s=1, alpha=0.4)
+                ax.get_xaxis().set_visible(False)
+                ax.get_yaxis().set_visible(False)
+                if i == 0:
+                    ax.get_yaxis().set_visible(True)
+                    ax.set_ylabel(self.ax_labels[j])
+                if j == self.ndim-1:
+                    ax.get_xaxis().set_visible(True)
+                    ax.set_xlabel(self.ax_labels[i])
 
+        fig.suptitle("component-"+str(k))
+        plt.tight_layout()
+        plt.subplots_adjust(wspace=0, hspace=0)
+        return fig, subplots
+
+    def figures(self):
+        for k in range(self.n_components):
+            fig, axs = self.figure(k)
+            self.figs.append(fig)
+            self.axes.append(axs)
 
     def plot(self, n, clear=True, color='k'):
         if clear:
@@ -63,18 +82,23 @@ class GMMTracker(object):
             n = len(self.backend) + n
         self.n = n
         if self.axes is None:
-            self.figure()
-        for i, ax in enumerate(self.axes):
-            try:
-                v = self.backend.V[n][i][np.ix_(self.dim_view, self.dim_view)]
-                e = plot_ellipse(ax, self.backend.mu[n][i][self.dim_view], v, color)
-                c = plot_centre(ax, self.backend.mu[n][i][self.dim_view], color)
-                self.artists.append(e)
-                self.artists.append(c)
-                direction = plot_direction(ax, self.backend.mu[n][i][self.dim_view], self.backend.mu[n+1][i][self.dim_view], color=color, label='EMstep')
-                self.artists.append(direction)
-            except IndexError:
-                pass
+            self.figures()
+
+        for k, (fig, axs) in enumerate(zip(self.figs, self.axes)):
+            for i in range(self.ndim):
+                for j in range(i + 1, self.ndim):
+                    ax = axs[i, j]
+                    try:
+                        v = self.backend.V[n][k][np.ix_([i, j], [i, j])]
+                        e = plot_ellipse(ax, self.backend.mu[n][k][[i, j]], v, color)
+                        c = plot_centre(ax, self.backend.mu[n][k][[i, j]], color)
+                        self.artists.append(e)
+                        self.artists.append(c)
+                        direction = plot_direction(ax, self.backend.mu[n][k][[i, j]],
+                                                   self.backend.mu[n+1][k][[i, j]], color=color, label='EMstep')
+                        self.artists.append(direction)
+                    except IndexError:
+                        pass
 
 
     def clear(self):

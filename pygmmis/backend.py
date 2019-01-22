@@ -81,8 +81,46 @@ class BackendBase(object):
     def __getattr__(self, item):
         return self.arrays[item][:self.iteration]
 
-Event = namedtuple('Event', ['event', 'origin', 'origin_iteration', 'into', 'into_iteration'])
 
+class HDFBackendBase(BackendBase):
+    def __init__(self, fname, name):
+        self.fname = fname
+        super().__init__(name)
+
+    def open(self, **kwargs):
+        import h5py
+        return h5py.File(self.fname, **kwargs)
+
+    def setup(self, length, **varvalues):
+        with self.open(mode='a')  as f:
+            group = f.require_group(self.name)
+            for k, v in varvalues.items():
+                ds = f.require_dataset(k, shape=v.shape, dtype=v.dtype, )
+
+
+    def grow(self, length):
+        super().grow(length)
+
+    def save(self, **varvalues):
+        super().save(**varvalues)
+
+    def __getitem__(self, item):
+        return super().__getitem__(item)
+
+    def get_values(self, varname, index=None):
+        return super().get_values(varname, index)
+
+    def __len__(self):
+        return super().__len__()
+
+    def __repr__(self):
+        return super().__repr__()
+
+    def __getattr__(self, item):
+        return super().__getattr__(item)
+
+
+Event = namedtuple('Event', ['event', 'origin', 'origin_iteration', 'into', 'into_iteration'])
 
 class MultiBackend(object):
     def __init__(self, name, backend_type):
