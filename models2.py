@@ -99,12 +99,13 @@ if __name__ == '__main__':
     gmm.covar = model.V.copy()
     gmm.amp = model.alpha.copy()
 
+
     from pygmmis.backend import Backend
     backend = Backend('backend')
 
     logL, U = pygmmis.fit(gmm, observed_data, init_method='none', sel_callback=selection, w=w, eta=eta, cutoff=cutoff,
                           oversampling=oversampling,
-                          tol=tol, rng=rng, maxiter=maxiter, split_n_merge=10,
+                          tol=tol, rng=rng, maxiter=2, split_n_merge=10,
                           backend=backend)
     #
     #

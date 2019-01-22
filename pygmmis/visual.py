@@ -27,8 +27,7 @@ def plot_direction(ax, old, new, **kwargs):
 
 
 class GMMTracker(object):
-    def __init__(self, backend, data):
-        assert backend.mu.shape[-1] == 2
+    def __init__(self, backend, data, dim_view=None, ax_labels=(None, None)):
         self.backend = backend
         self.data = data
         self.artists = []
@@ -36,6 +35,9 @@ class GMMTracker(object):
         self.fig, self.axes = None, None
         self.n_components = self.backend.mu.shape[1]
         self.ndim = self.backend.mu.shape[2]
+        self.dim_view = dim_view or [0, 1]
+        assert len(self.dim_view) == 2, "Can only visualise a 2d slice"
+        self.ax_labels = ax_labels
 
     def figure(self):
         a = np.sqrt(self.n_components)
@@ -47,8 +49,10 @@ class GMMTracker(object):
         ax = None
         for i in range(self.n_components):
             ax = self.fig.add_subplot(shape[0], shape[1], i+1, sharex=ax, sharey=ax)
-            ax.scatter(*self.data.T, s=1, alpha=0.4)
+            ax.scatter(*self.data[:, self.dim_view].T, s=1, alpha=0.4)
             ax.set_title(i)
+            ax.set_xlabel(self.ax_labels[0])
+            ax.set_ylabel(self.ax_labels[1])
             self.axes.append(ax)
 
 
@@ -62,11 +66,12 @@ class GMMTracker(object):
             self.figure()
         for i, ax in enumerate(self.axes):
             try:
-                e = plot_ellipse(ax, self.backend.mu[n][i], self.backend.V[n][i], color)
-                c = plot_centre(ax, self.backend.mu[n][i], color)
+                v = self.backend.V[n][i][np.ix_(self.dim_view, self.dim_view)]
+                e = plot_ellipse(ax, self.backend.mu[n][i][self.dim_view], v, color)
+                c = plot_centre(ax, self.backend.mu[n][i][self.dim_view], color)
                 self.artists.append(e)
                 self.artists.append(c)
-                direction = plot_direction(ax, self.backend.mu[n][i], self.backend.mu[n+1][i], color=color, label='EMstep')
+                direction = plot_direction(ax, self.backend.mu[n][i][self.dim_view], self.backend.mu[n+1][i][self.dim_view], color=color, label='EMstep')
                 self.artists.append(direction)
             except IndexError:
                 pass
