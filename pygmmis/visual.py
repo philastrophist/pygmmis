@@ -42,7 +42,7 @@ class GMMTracker(object):
         self.figs, self.axes = [], []
         self.n_components = self.backend.mu.shape[1]
         self.ndim = self.backend.mu.shape[2]
-        self.ax_labels = ax_labels
+        self.ax_labels = ax_labels or list(map(str, range(self.ndim)))
 
     def figure(self, k):
         fig = plt.figure()

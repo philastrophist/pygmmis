@@ -44,19 +44,19 @@ class ConvergenceDetector(object):
         #     return False, info
         if (not big_gradient) and significant_gradient:
             if not self.last_check:
-                logging.info("{}-{}: Gradient is significant but flat within {}, double checking".format(self.burnin, n, self.tolerance))
+                logging.debug("{}-{}: Gradient is significant but flat within {}, double checking".format(self.burnin, n, self.tolerance))
                 self.last_check = True
                 return False, mu_std, info
             else:
-                logging.info("{}-{}: Converged within {}".format(self.burnin, n, self.tolerance))
+                logging.debug("{}-{}: Converged within {}".format(self.burnin, n, self.tolerance))
                 return True, mu_std, info
         if (not significant_gradient):
             if not self.last_check:
-                logging.info("{}-{}: Gradient {} is not significant (p={} >= {}), might have converged, double checking".format(self.burnin, n, gradient, pvalue, self.pvalue))
+                logging.debug("{}-{}: Gradient {} is not significant (p={} >= {}), might have converged, double checking".format(self.burnin, n, gradient, pvalue, self.pvalue))
                 self.last_check = True
                 return False, mu_std, info
             else:
-                logging.info( "{}-{}: Double checked, gradient {} is not significant (p={} >= {}), converged".format(self.burnin, n, gradient, pvalue, self.pvalue))
+                logging.debug( "{}-{}: Double checked, gradient {} is not significant (p={} >= {}), converged".format(self.burnin, n, gradient, pvalue, self.pvalue))
                 return True, mu_std, info
 
         if significant_gradient and big_gradient:

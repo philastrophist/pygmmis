@@ -539,7 +539,7 @@ def initFromKMeans(gmm, data, covar=None, rng=np.random):
 
 def fit(gmm, data, covar=None, R=None, init_method='random', w=0., eta=0, cutoff=None, sel_callback=None, oversampling=10,
         covar_callback=None, background=None, tol=1e-3, maxiter=None, burnin=0, min_occupation=0, frozen=None, split_n_merge=False,
-        rng=np.random, backend=None, verbose=False):
+        rng=np.random, backend=None, verbose=True):
     """Fit GMM to data.
 
     If given, init_callback is called to set up the GMM components. Then, the
@@ -741,7 +741,6 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., eta=0, cutoff
                                                            cutoff=cutoff, background=background, p_bg=p_bg, maxiter=maxiter, burnin=burnin, min_occupation=min_occupation, tol=tol, prefix="SNM_F",
                                                            changeable=changeable, rng=rng, backend=backend, verbose=verbose)
             if log_L - log_L_std >= log_L_ + log_L_std_:
-                # revert to backup
                 gmm.amp[:] = gmm_.amp[:]
                 gmm.mean[:] = gmm_.mean[:,:]
                 gmm.covar[:,:,:] = gmm_.covar[:,:,:]
@@ -754,7 +753,14 @@ def fit(gmm, data, covar=None, R=None, init_method='random', w=0., eta=0, cutoff
                 logger.info("split'n'merge likelihood increased: keep going")
             else:
                 # no real difference
-                logger.info("split'n'merge likelihood didn't really change: keep going")
+                gmm.amp[:] = gmm_.amp[:]
+                gmm.mean[:] = gmm_.mean[:,:]
+                gmm.covar[:,:,:] = gmm_.covar[:,:,:]
+                U = U_
+                logger.info("split'n'merge likelihood didn't really change: cutting our losses and reverting to previous model")
+                if backend is not None:
+                    backend.switch_chain(previous)
+                break
 
             log_L = log_L_
             split_n_merge -= 1
@@ -789,13 +795,13 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
         shift_cutoff = chi2_cutoff(gmm.D, cutoff=0.25)
 
     it = 0
-    header = "ITER\tSAMPLES"
-    if sel_callback is not None:
-        header += "\tIMPUTED\tORIG"
-    if background is not None:
-        header += "\tBG_AMP"
-    header += "\tLOG_L\tSTABLE"
-    logger.info(header)
+    # header = "ITER\tSAMPLES"
+    # if sel_callback is not None:
+    #     header += "\tIMPUTED\tORIG"
+    # if background is not None:
+    #     header += "\tBG_AMP"
+    # header += "\tLOG_L\tSTABLE"
+    # logger.info(header)
 
     # save backup
     gmm_ = GMM(gmm.K, gmm.D)
@@ -823,13 +829,13 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
         # check if component has moved by more than sigma/2
         shift2 = np.einsum('...i,...ij,...j', gmm.mean - gmm_.mean, np.linalg.inv(gmm_.covar), gmm.mean - gmm_.mean)
         moved = np.flatnonzero(shift2 > shift_cutoff)
-        status_mess = "%s%d\t%d" % (prefix, it, N)
-        if sel_callback is not None:
-            status_mess += "\t%d\t%d" % (N2, N0)
-        if background is not None:
-            status_mess += "\t%.3f" % bg_amp_
-        status_mess += "\t%.3f\t%d" % (log_L_, gmm.K - moved.size)
-        logger.info(status_mess)
+        # status_mess = "%s%d\t%d" % (prefix, it, N)
+        # if sel_callback is not None:
+        #     status_mess += "\t%d\t%d" % (N2, N0)
+        # if background is not None:
+        #     status_mess += "\t%.3f" % bg_amp_
+        # status_mess += "\t%.3f\t%d" % (log_L_, gmm.K - moved.size)
+        # logger.info(status_mess)
 
         # with imputation or background fitting, observed logL can decrease
         # allow some slack, but revert to previous model if it gets worse
@@ -844,7 +850,7 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
                     background.amp = bg_amp_
                 break
             converged, (log_L_mean, log_L_std), (gradient, pvalue) = detector.test_convergence(log_Ls)
-            if converged:
+            if (it == maxiter - 1) or converged:
                 if log_L_mean < log_Ls[0] - detector.tolerance:
                     gmm.amp[:] = gmm_.amp[:]
                     gmm.mean[:,:] = gmm_.mean[:,:]
@@ -881,7 +887,7 @@ def _EM(gmm, log_p, U, T_inv, log_S, H, data, covar=None, R=None, sel_callback=N
         if backend is not None:
             backend.save(mu=gmm.mean, V=gmm.covar, alpha=gmm.amp, log_L=log_L)
         if len(log_Ls) > 2:
-            loading_bar.desc = 'dlogL = {:.2e}'.format(gradient)
+            loading_bar.desc = '{}: dlogL={:.2e} Nt={}'.format(prefix, gradient, N0)
         loading_bar.update()
     if len(log_Ls) > 3:
         log_L, log_L_err = detector.test_convergence(log_Ls)[1]

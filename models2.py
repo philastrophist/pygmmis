@@ -35,7 +35,7 @@ def gaussians_in_a_box(ndim, ncomp, density, percent=5):
     width = np.asarray([[2 * np.sqrt(5.991 * var) for var in np.linalg.eig(v)[0]] for v in xdgmm.V]).max()
     xdgmm.mu = np.random.uniform(-width / density, width / density, size=(ncomp, ndim))
 
-    c = cycle([0.25, 0.5])
+    c = cycle([0.25, 0.5, 0.1])
     xdgmm.alpha = np.array([next(c) for _ in range(ncomp)])
     xdgmm.alpha /= xdgmm.alpha.sum()
 
@@ -105,7 +105,7 @@ if __name__ == '__main__':
 
     logL, U = pygmmis.fit(gmm, observed_data, init_method='none', sel_callback=selection, w=w, eta=eta, cutoff=cutoff,
                           oversampling=oversampling,
-                          tol=tol, rng=rng, maxiter=2, split_n_merge=10,
+                          tol=tol, rng=rng, maxiter=1000, split_n_merge=10,
                           backend=backend)
     #
     #
@@ -123,6 +123,7 @@ if __name__ == '__main__':
     #                       tol=tol, rng=rng, maxiter=maxiter, frozen=[1],
     #                       backend=backend)
 
-    plt.plot(backend.master.get_values('log_L'))
-    tracker = GMMTracker(backend, observed_data)
-    tracker.plot_trace()
+    # plt.plot(backend.master.get_values('log_L'))
+    # tracker = GMMTracker(backend, observed_data)
+    # tracker.figures()
+    # tracker.plot_trace()

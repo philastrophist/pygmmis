@@ -195,6 +195,8 @@ class MultiBackend(object):
         self.current.save(**varvalues)
 
     def branch_chain(self, length, name):
+        if name in self.store.keys():
+            name += "{}: ".format((len([i for i in self.store.keys() if name in i])))
         new = self.backend_type(name)
         new.setup(length, **self.master[0])
         self.store[name] = new
