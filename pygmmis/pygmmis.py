@@ -954,7 +954,7 @@ def _EMstep(gmm, log_p, U, T_inv, log_S, H, N0, data, covar=None, R=None, sel_ca
 
 
     _update(gmm, A, M, C, N, B, H, A2, M2, C2, N2, B2, H2, w, eta, m, changeable=changeable, background=background)
-    log_L -= N * (np.log(N) - np.log(N + N2))
+    # log_L -= N * (np.log(N) - np.log(N + N2))
     return log_L, N, N2, N0, A/(A+A2)
 
 # perform E step calculations.
